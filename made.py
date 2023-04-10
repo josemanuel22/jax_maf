@@ -1,8 +1,20 @@
 from typing import List, Optional
-import numpy as np
 import jax.numpy as jnp
-from jax import  nn, random
+from jax import  nn, random, jit
 
+class Sequential:
+    def __init__(self, modules) -> None:
+        self._modules = modules
+        
+    @jit
+    def model(self, x):
+        for layer in self._modules:
+            x = layer(x)
+        return x
+    
+    def modules(self):
+        return self._modules
+    
 class MaskedLinear:
     """Linear transformation with masked out elements. y = x.dot(mask*W.T) + b"""
 
@@ -13,7 +25,6 @@ class MaskedLinear:
             n_out:Size of each output sample.
             bias: Whether to include additive bias. Default: True.
         """
-        super().__init__()
         self.n_in = n_in
         self.n_out = n_out
         self.bias = bias
@@ -35,7 +46,7 @@ class MADE:
         hidden_dims: List[int],
         gaussian: bool = False,
         random_order: bool = False,
-        seed: Optional[int] = None,
+        seed: Optional[int] = 1234,
     ) -> None:
         """Initalise MADE model.
 
@@ -47,7 +58,7 @@ class MADE:
             seed: Random seed for numpy. Default: None.
         """
         # Set random seed.
-        self.key = random.PRNGKey(seed)
+        self.key = random.PRNGKey(1234)
         self.n_in = n_in
         self.n_out = 2 * n_in if gaussian else n_in
         self.hidden_dims = hidden_dims
@@ -65,6 +76,8 @@ class MADE:
             self.layers.append(nn.relu)
         # Hidden layer to output layer.
         self.layers.append(MaskedLinear(dim_list[-2], dim_list[-1]))
+        # Create model.
+        self.model = Sequential(self.layers)
         # Get masks for the masked activations.
         self._create_masks()
 
@@ -93,7 +106,7 @@ class MADE:
         for l in range(L):
             low = self.masks[l].min()
             size = self.hidden_dims[l]
-            self.masks[l + 1] = random.randint(self.key, low=low, high=D - 1, shape=(size,))
+            self.masks[l + 1] = random.randint(self.key, minval=low, maxval=D - 1, shape=(size,))
 
         # Add m for output layer. Output order same as input order.
         self.masks[L + 1] = self.masks[0]
@@ -106,7 +119,7 @@ class MADE:
             M = jnp.zeros((len(m_next), len(m)))
             for j in range(len(m_next)):
                 # Use broadcasting to compare m_next[j] to each element in m.
-                M = jax.ops.index_update(M, (j, slice(None)), jnp.where(m_next[j] >= m, 1, 0))
+                M = M.at[(j, slice(None))].set(jnp.where(m_next[j] >= m, 1, 0))
             # Append to mask matrix list.
             self.mask_matrix.append(M)
 
