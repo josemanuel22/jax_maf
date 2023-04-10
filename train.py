@@ -12,7 +12,7 @@ from utils.plot import sample_digits_maf, plot_losses
 # --------- SET PARAMETERS ----------
 model_name = "maf"  # 'MAF' or 'MADE'
 dataset_name = "mnist"
-batch_size = 128
+batch_size = 60
 n_mades = 5
 hidden_dims = [512]
 lr = 1e-4

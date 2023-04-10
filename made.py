@@ -1,16 +1,9 @@
 from typing import List, Optional
 import numpy as np
-from numpy.random import permutation, randint
-import torch
-import torch.nn as nn
-from torch import Tensor
-from torch.nn import functional as F
-from torch.nn import ReLU
+import jax.numpy as jnp
+from jax import  nn, random
 
-# This implementation of MADE is copied from: https://github.com/e-hulten/made.
-
-
-class MaskedLinear(nn.Linear):
+class MaskedLinear:
     """Linear transformation with masked out elements. y = x.dot(mask*W.T) + b"""
 
     def __init__(self, n_in: int, n_out: int, bias: bool = True) -> None:
@@ -20,19 +13,22 @@ class MaskedLinear(nn.Linear):
             n_out:Size of each output sample.
             bias: Whether to include additive bias. Default: True.
         """
-        super().__init__(n_in, n_out, bias)
+        super().__init__()
+        self.n_in = n_in
+        self.n_out = n_out
+        self.bias = bias
         self.mask = None
 
-    def initialise_mask(self, mask: Tensor):
+    def initialise_mask(self, mask: jnp.ndarray):
         """Internal method to initialise mask."""
         self.mask = mask
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: jnp.ndarray) -> jnp.ndarray:
         """Apply masked linear transformation."""
-        return F.linear(x, self.mask * self.weight, self.bias)
-
-
-class MADE(nn.Module):
+        output = jnp.dot(x, self.mask * self.weight.T) + self.bias
+        return output
+    
+class MADE:
     def __init__(
         self,
         n_in: int,
@@ -42,7 +38,7 @@ class MADE(nn.Module):
         seed: Optional[int] = None,
     ) -> None:
         """Initalise MADE model.
-    
+
         Args:
             n_in: Size of input.
             hidden_dims: List with sizes of the hidden layers.
@@ -50,9 +46,8 @@ class MADE(nn.Module):
             random_order: Whether to use random order. Default: False.
             seed: Random seed for numpy. Default: None.
         """
-        super().__init__()
         # Set random seed.
-        np.random.seed(seed)
+        self.key = random.PRNGKey(seed)
         self.n_in = n_in
         self.n_out = 2 * n_in if gaussian else n_in
         self.hidden_dims = hidden_dims
@@ -67,23 +62,23 @@ class MADE(nn.Module):
         # Make layers and activation functions.
         for i in range(len(dim_list) - 2):
             self.layers.append(MaskedLinear(dim_list[i], dim_list[i + 1]),)
-            self.layers.append(ReLU())
+            self.layers.append(nn.relu)
         # Hidden layer to output layer.
         self.layers.append(MaskedLinear(dim_list[-2], dim_list[-1]))
-        # Create model.
-        self.model = nn.Sequential(*self.layers)
         # Get masks for the masked activations.
         self._create_masks()
 
-    def forward(self, x: Tensor) -> Tensor:
+    @jit
+    def forward(self, x: jnp.ndarray) -> jnp.ndarray:
         """Forward pass."""
         if self.gaussian:
-            # If the output is Gaussan, return raw mus and sigmas.
+            # If the output is Gaussian, return raw mus and sigmas.
             return self.model(x)
         else:
-            # If the output is Bernoulli, run it trough sigmoid to squash p into (0,1).
-            return torch.sigmoid(self.model(x))
-
+            # If the output is Bernoulli, run it through sigmoid to squash p into (0,1).
+            return jax.nn.sigmoid(self.model(x))
+        
+            
     def _create_masks(self) -> None:
         """Create masks for the hidden layers."""
         # Define some constants for brevity.
@@ -91,14 +86,14 @@ class MADE(nn.Module):
         D = self.n_in
 
         # Whether to use random or natural ordering of the inputs.
-        self.masks[0] = permutation(D) if self.random_order else np.arange(D)
+        self.masks[0] = random.permutation(self.key, D) if self.random_order else jnp.arange(D)
 
         # Set the connectivity number m for the hidden layers.
         # m ~ DiscreteUniform[min_{prev_layer}(m), D-1]
         for l in range(L):
             low = self.masks[l].min()
             size = self.hidden_dims[l]
-            self.masks[l + 1] = randint(low=low, high=D - 1, size=size)
+            self.masks[l + 1] = random.randint(self.key, low=low, high=D - 1, shape=(size,))
 
         # Add m for output layer. Output order same as input order.
         self.masks[L + 1] = self.masks[0]
@@ -108,10 +103,10 @@ class MADE(nn.Module):
             m = self.masks[i]
             m_next = self.masks[i + 1]
             # Initialise mask matrix.
-            M = torch.zeros(len(m_next), len(m))
+            M = jnp.zeros((len(m_next), len(m)))
             for j in range(len(m_next)):
                 # Use broadcasting to compare m_next[j] to each element in m.
-                M[j, :] = torch.from_numpy((m_next[j] >= m).astype(int))
+                M = jax.ops.index_update(M, (j, slice(None)), jnp.where(m_next[j] >= m, 1, 0))
             # Append to mask matrix list.
             self.mask_matrix.append(M)
 
@@ -119,7 +114,7 @@ class MADE(nn.Module):
         # Pairwise identical masks.
         if self.gaussian:
             m = self.mask_matrix.pop(-1)
-            self.mask_matrix.append(torch.cat((m, m), dim=0))
+            self.mask_matrix.append(jnp.concatenate((m, m), axis=0))
 
         # Initalise the MaskedLinear layers with weights.
         mask_iter = iter(self.mask_matrix)

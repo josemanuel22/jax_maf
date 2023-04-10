@@ -1,10 +1,7 @@
-import torch
-import torch.utils.data
 import numpy as np
 import gzip
 import pickle
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 """ 
 This is a version of: https://github.com/gpapamak/maf/blob/master/datasets/mnist.py, 
@@ -12,7 +9,6 @@ adapted to work with Python 3.x and PyTorch.
 """
 
 batch_size = 100
-
 
 class MNISTDataset:
 
